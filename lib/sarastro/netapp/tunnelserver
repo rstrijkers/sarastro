@@ -1,0 +1,460 @@
+#!/usr/bin/env ruby
+# 
+# Copyright (C) 2012 Rudolf Strijkers <rudolf.strijkers@tno.nl>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# Homing service for virtual Internets
+#
+# first kill the existing process...
+
+if `ls pid.txt`.strip == "pid.txt"
+  pid = `cat pid.txt`.strip
+  unless pid.empty?
+      # if there is no pid, we are done
+      pids = []
+      new_pid = pid
+      begin
+        tmp = `ps -o pid --no-headers --ppid #{new_pid}`.split("\n")
+        break if tmp.empty?
+        pids.push tmp
+        new_pid = tmp
+      end while true
+
+      # remove duplicates and make into list
+      pids = pids.flatten.uniq
+      puts "found pids: #{pids.inspect}"
+
+      begin
+        cp = pids.pop
+        puts "sudo kill -9 #{cp}"
+        `sudo kill -9 #{cp}`
+        break if pids.empty?
+      end while true unless pids.empty?
+      puts "kill parent: #{pid}"
+      `sudo kill -9 #{pid}`
+  end
+end
+
+require 'rubygems'
+
+require 'thin'
+require 'logger'
+require 'rack/request'
+require 'rack/response'
+require 'rack'
+require 'json'
+require 'erb'
+require 'open-uri'
+require 'uri'
+
+$config = {
+  :serverport=> 8888,
+  :key => "aetnauoscrsaibeioahtdundaoehtnuaeo",
+  :vtunport => 5000,
+  :vtunhost => "cloud",
+  :vtuniface=> "tap"
+}
+
+$servers = {}
+$clients = {}
+$radvd = nil
+$router = nil
+
+module Rack
+class HomingEntry
+  def initialize
+    @port = $config[:vtunport]
+    @host = $config[:vtunhost]
+    @tapindex = 0
+    @portindex = $config[:vtunport]
+    
+    `echo #{Process.pid} > pid.txt`
+  end
+    
+  # receive calls:
+  #   all need a key="aetnauoscrsaibeioahtdundaoehtnuaeo"
+  #   create_tunnel?dest="ip"
+  #   kill_tunnel?dest="ip"
+  #   list_tunnels
+  #
+  #   - client mode: start up a connection to a server after receiving a configuration
+  #   create_client?src="ip"&config="vtund"
+  #
+  #   - radvd (just support one interface now to autoconfigure)
+  #   start_radvd?iface=tapX?address=2001:1234:1234::/48
+  #   stop_radvd
+  #
+  #   - routing
+  #     - start_router: setup router configuration and start it up 
+  #       - can be called anytime, it will restart the router with new configuration
+  #       - assumes addresses are configured
+  #       - may take static routes from radvd
+  #
+  #   - addressing
+  #     - setup addresses for the tunnels (dest => ipaddr, dest maps to tap)
+  def call(env)
+    req = Request.new(env)
+    return [403, {}, ["user not authorized"]] unless req.params["key"] == $config[:key]
+    req.params.delete("key")
+    
+    case request = req.path[1..-1]
+    when "create_tunnel", "kill_tunnel", "kill_tunnel2", "list_tunnels", "create_client", "start_radvd", "start_router", "list_ifaces"
+      res = send(request, req.params, req)
+    else
+      res = "no such method"
+    end
+
+    [200, {}, [res]]
+  end
+
+  # 1. create config file
+  #   - generate unique host definition
+  #   - generate unique port number for the server
+  # 2. start server
+  #   - record pid
+  # 3. copy configuration to client
+  # 4. start client
+  #  
+  # expects: {dest => "ip"}
+  def create_tunnel(params, env)
+    res = []
+    # create config file
+    puts "create tunnel with params: #{params.inspect}"
+    
+    # todo: check if remote host already has a server with us as destination
+    # now we DONT CHECK IF MULTIPLE tunnels exist between two end-points...
+    # request.env["SERVER_NAME"] gives us the public address used, or it has to be supplied at startup...
+    
+    # 1. create config file
+    #   - generate unique host definition
+    #   - generate unique port number for the server
+    #   - generate unique tap interface 
+    #      - we need to know the interface for a destination to start radv
+    port = gen_vtun_port
+    tap = gen_vtun_iface
+    config_file = "#{params["dest"]}.vtun"
+    open(config_file, "w") { |f|
+      f.write create_configuration(port, tap)
+    }
+
+    # 2. start server
+    #   - record pid
+    #   - if tunnel exists for the destination, kill it first
+    if $servers[params["dest"]]
+      killallsubprocesses($servers[params["dest"]][0].pid)
+      $servers[params["dest"]][0].close
+      "killed tunnel to #{params["dest"]}: #{$servers[params["dest"]]}"
+      $servers.delete(params["dest"])
+    end
+    
+    $servers[params["dest"]] = [IO.popen("sudo vtund -s -f #{config_file} -n"), tap]
+    res.push "pid is #{$servers[params["dest"]][0].pid}"
+
+    # 3. copy configuration to client
+    # 4. start client    
+    Thread.new {
+      # wait for server to come up
+      sleep(2) # unreliable, because it may take some while, and when shorter wastes time...
+      open("http://#{params["dest"]}:#{$config[:serverport]}/create_client?key=#{$config[:key]}&config=#{port}") {|f|
+        puts "client (#{params["dest"]}) returned: #{f.read}"
+      }
+      # always ends...
+    }
+    res
+  end
+  
+  # match dest with current tunnel
+  # a kill will always kill the other end, too
+  # assumes that we can't have multiple tunnels between two end points.
+  # it just first finds either a client or server with the destination,
+  # then it calls the other end with the server address in the request, 
+  # i.e. the destination from the other ends perspective.
+  def kill_tunnel2(params, env, *state)
+    puts "Got request to create the other end..."
+    kill_tunnel(params, env, true)
+  end
+
+  def kill_tunnel(params, env, *state)
+    # kill remote tunnel using my public address
+    # otherend = env.ip
+    puts "I am: #{env.env["SERVER_NAME"]}"
+    me = env.env["SERVER_NAME"]
+    res = []  
+    
+    # look for servers for a tunnel to the destination
+    if $servers[params["dest"]]
+      killallsubprocesses($servers[params["dest"]][0].pid)
+      $servers[params["dest"]][0].close
+      "killed tunnel to #{params["dest"]}: #{$servers[params["dest"]]}"
+      $servers.delete(params["dest"])
+
+      # now send the message to kill the client part   
+      if state.empty?
+        puts "http://#{params["dest"]}:#{$config[:serverport]}/kill_tunnel2?dest=#{me}&key=#{$config[:key]}"
+        open("http://#{params["dest"]}:#{$config[:serverport]}/kill_tunnel2?dest=#{me}&key=#{$config[:key]}") {|f|
+          res.push f.read
+        }
+      end
+      return res
+    end
+    
+    if $clients[params["dest"]]
+      killallsubprocesses($clients[params["dest"]][0].pid)
+      $clients[params["dest"]][0].close
+      "killed tunnel to #{params["dest"]}: #{$clients[params["dest"]]}"
+      $clients.delete(params["dest"])
+
+      # now send the message to kill the server part
+      if state.empty?
+        puts "http://#{params["dest"]}:#{$config[:serverport]}/kill_tunnel2?dest=#{me}&key=#{$config[:key]}"
+        open("http://#{params["dest"]}:#{$config[:serverport]}/kill_tunnel2?dest=#{me}&key=#{$config[:key]}") {|f|
+          res.push f.read
+        }
+      end 
+      return res
+    end
+    
+    "no tunnel"
+  end
+
+  def list_tunnels(params, env)
+    {"servers" => $servers,
+     "clients" => $clients}.to_json
+  end
+
+  # creates a vtun client with the supplied configuration
+  # takes the end-point from the src ip of the request, i.e. the vtun server
+  # requests the connect
+  #
+  # other should contain the request header to retrieve the server address
+  def create_client(params, env)
+    dest = env.ip
+    # puts params.inspect -- parsen gaat niet goed omdat ; string delimeter is...
+    puts "creating client to: #{dest}"
+
+    # write config out to file
+    config_file = "#{dest}.vtun"
+    tap = "#{gen_vtun_iface}1"
+    open(config_file, "w") { |f|
+      f.write create_configuration(params["config"], tap)
+    }
+
+    # if tunnel exists for the destination, kill it first
+    if $clients[dest]
+      killallsubprocesses($clients[dest][0].pid)
+      $clients[params["dest"]][0].close
+      "killed tunnel to #{dest}: #{$clients[dest]}"
+      $client.delete(dest)
+    end
+    
+    $clients[dest] = [IO.popen("sudo vtund -f #{config_file} -n #{$config[:vtunhost]} #{dest}"), tap]
+
+    "pid is #{$clients[dest][0].pid}"
+  end
+
+  # if a tunnel is killed the freed port can be reused
+  # here we just increase the index
+  # generate a higher number than the current taps
+  # XXX: assumes three letter string!!!
+  def gen_vtun_port
+    @portindex+=1
+  end
+
+  # if a tunnel is killed the freed iface can be reused
+  # here we just increase the index
+  def gen_vtun_iface
+    taps = `/sbin/ifconfig -a | grep tap | awk '{print $1}'`.split("\n")
+    if taps.empty?
+      @tapindex+=1
+      return "#{$config[:vtuniface]}#{@tapindex}"
+    end
+    index = taps.map {|tap| tap[3..-1].to_i}.sort[-1]
+    
+    @tapindex=index+1
+    "#{$config[:vtuniface]}#{@tapindex}"
+  end
+  
+  # recurse through all children, then reverse kill all
+  def killallsubprocesses(pid)
+    # if there is no pid, we are done
+    pids = []
+    new_pid = pid
+    begin
+      tmp = `ps -o pid --no-headers --ppid #{new_pid}`.split("\n")
+      break if tmp.empty?
+      pids.push tmp
+      new_pid = tmp
+    end while true
+
+    # remove duplicates and make into list
+    pids = pids.flatten.uniq
+    puts "found pids: #{pids.inspect}"
+
+    begin
+      cp = pids.pop
+      puts "sudo kill -9 #{cp}"
+      `sudo kill -9 #{cp}`
+      break if pids.empty?
+    end while true unless pids.empty?
+    puts "kill parent: #{pid}"
+    `sudo kill -9 #{pid}`
+  end
+  
+  def create_configuration(port, tap)
+    tunneltemplate = ERB.new <<-EOF
+    options {
+      port <%= port %>;  
+    }
+
+    <%= host %> {
+      password appelflap;
+      type ether;
+      proto udp;
+      device <%= tap %>;
+      keepalive yes;
+      up {
+        ifconfig "<%= tap %> up";
+      }
+    }
+    EOF
+    host = $config[:vtunhost]
+    tunneltemplate.result(binding)
+  end
+  
+  def start_radvd(params, env)
+    puts "got configuration: #{JSON.parse(URI.unescape params["config"]).inspect}"
+    
+    radvdconfig = JSON.parse(URI.unescape params["config"])
+    # get interfaces associated to the addresses
+    return "got bullshit" unless radvdconfig
+
+    cfgtempl = []
+    radvdconfig.each {|ip, addr|
+      tap = $servers[ip][1] if $servers[ip]
+      tap = $clients[ip][1] if $clients[ip]
+      if tap
+        cfgtempl.push([tap, addr])       
+        # assign addresses to the interfaces
+        `sudo /sbin/ip -6 addr add #{addr} dev #{tap}`
+      end
+    }
+    
+    radvdtemplate = ERB.new <<-EOF
+    <% cfgtempl.each do |iface,addr| %>              
+    interface <%= iface %> { 
+            AdvSendAdvert on;
+            MinRtrAdvInterval 3; 
+            MaxRtrAdvInterval 10;
+            prefix <%= addr.gsub("::1/", "::/") %> { 
+                    AdvOnLink on; 
+                    AdvAutonomous on; 
+                    AdvRouterAddr on; 
+            };
+    };
+    <% end %>    
+    EOF
+
+    # write to /etc/radvd.conf  
+    open("radvd.conf", "w") { |f|
+      f.write radvdtemplate.result(binding)
+    }    
+
+    # make sure forwarding is enabled
+    `sudo sysctl -w net.ipv6.conf.all.forwarding=1`
+
+    # kill if existed radvd
+    killallsubprocesses($radvd.pid) if $radvd
+      
+    # start daemon, force radvd in foreground by turning on debugging
+    $radvd = IO.popen("sudo radvd -d 1 -C radvd.conf > radvd.log 2>&1")
+  end
+  
+  def start_router(params, env)
+    # set router id to our public address
+    me = env.env["SERVER_NAME"]
+    
+    # get all tap interfaces we are connected to
+    ifaces = []
+    $servers.each {|ip,iface|
+      ifaces.push iface[1]
+    }
+    $clients.each {|ip,iface|
+      ifaces.push iface[1]
+    }
+    
+    routertemplate = ERB.new <<-EOF
+    router id <%= me %>;
+    protocol kernel {
+            persist;                # Don't remove routes on bird shutdown
+            scan time 20;           # Scan kernel routing table every 20 seconds
+            export all;             # Default is export none
+    }
+
+    # This pseudo-protocol watches all interface up/down events.
+    protocol device {
+            scan time 2;
+    }
+
+    protocol ospf MyOSPF {
+            area 0.0.0.0 {
+              <% ifaces.each do |iface| %>       
+              interface "<%= iface %>" {
+                      hello 2;
+                      authentication none;
+              };
+              <% end %>
+            };
+    }
+    EOF
+    
+    # bird6.conf
+    puts "Configuring and starting ospf"
+    
+    # write to bird6.conf
+    open("bird6.conf", "w") { |f|
+      f.write routertemplate.result(binding)
+    }
+    
+    # make sure forwarding is enabled
+    `sudo sysctl -w net.ipv6.conf.all.forwarding=1`
+
+    # kill if existed 
+    killallsubprocesses($router.pid) if $router
+      
+    # start daemon, force bird in foreground by turning on debugging
+    $router = IO.popen("sudo bird6 -c bird6.conf -d > bird6.log 2>&1")    
+  end  
+  
+  # return a list of the interfaces with the associated ip addresses
+  # don't count link-local...
+  def list_ifaces(params, env)
+    # get interfaces
+    #"ifconfig -a | grep tap | awk '{print $1}'"
+    # get ipv6 addressses except link local
+    #"ip -6 addr show dev eth0 | grep inet6 | grep -v fe80"
+    
+    # compile into a list:
+    # {iface => [addr1, addr2], etc}
+  end    
+end
+end
+
+Thin::Server.start("0.0.0.0", $config[:serverport]) do
+  use Rack::CommonLogger
+  map "/" do
+    run Rack::HomingEntry.new
+  end
+end
+

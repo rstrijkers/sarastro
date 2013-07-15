@@ -1,0 +1,244 @@
+#!/usr/bin/env ruby
+#
+# Copyright (C) 2012 Rudolf Strijkers <rudolf.strijkers@tno.nl>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# restarts sarastro_netapp
+#
+# checks if sv is running
+#   -> pid exists
+#   -> check if process is there, too
+#  unless sv
+#   -> sv.rb -d
+#  else
+#   sv is running, so we only kill sarastro_netapp, assuming that redis is 
+#   configured and running happily
+#   -> echo kill sarastro_netapp > sv.cmd
+#   
+
+@netapp_cmd = "ruby -I lib ./bin/sarastro_netapp.rb"
+@redis_cmd = "./redis-2.4.12/src/redis-server redis.conf"
+@pipe = "sv.cmd"
+@pidfile = "sv.pid"
+
+# XXX (to remove): remove artifact
+`rm -rf c5901-176.34.221.170`
+
+def unpack_bundle
+  puts "unpacking tar"
+  puts `tar -xf <%= name %>.tgz`
+end
+
+def update_gems
+  puts "updating gems"
+  puts `bundle install`
+end
+
+def store_hmac_keys
+  puts "writing hmac id / keys"
+  File.open("auth.json", "w") {|f|
+  	f.write <<AUTH
+{
+  "id" : "<%= hmac[:id] %>",
+  "secret": "<%= hmac[:key] %>"
+}
+AUTH
+  }
+end
+
+def stop_sv
+  if File.exist?(@pidfile)
+    # check if process is there
+    pid = File.read(@pidfile).strip.to_i
+    puts "checking sv pid: #{pid}"
+
+    if alive?(pid)
+      puts "sv running, quitting gracefully.."
+      sv_exec(["quit"])
+      
+      # wait 5 seconds, then force kill...
+      wait = 0
+      while wait < 5
+        puts "waiting until sv stops..."    
+        break unless File.exist?(@pidfile)
+        sleep 1
+        wait+=1
+      end
+      
+      unless wait > 5
+        puts "forcing sv kill"
+        force_kill(pid)
+        `rm -rf cmd.pid sv.pid`
+      end
+    else
+      `rm -rf cmd.pid sv.pid`      
+    end
+  end  
+  
+  # check the other processes
+  # no redis
+  `sudo killall -9 redis-server`
+  
+  # no sarastro_netapp
+  p = `ps eax | grep sarastro | awk '{print $1}'`.split("\n")
+  if p.size > 1
+    p.pop
+    p.each {|pid|      
+      puts "killing sarastro: #{pid}"
+      `sudo kill -9 #{pid}` unless Process.pid.to_s == pid
+    }
+  end
+
+  p = `ps eax | grep sv | awk '{print $1}'`.split("\n")
+  if p.size > 1
+    p.pop
+    p.each {|pid|      
+      puts "killing sv: #{pid}"
+      `sudo kill -9 #{pid}`
+    }
+  end
+  
+  # no vtun 
+  `sudo killall -9 vtund`
+end
+
+def force_kill(pid)
+  #begin
+  #  Process.kill("SIGTERM", pid)
+  #  Process.kill("SIGINT", pid)
+  #  Process.kill("SIGKILL", pid)
+  #rescue
+    # then just do it like this...
+    kill_hierarchy(pid)
+  #end
+end
+
+def kill_hierarchy(pid)
+  # if there is no pid, we are done
+  pids = []
+  new_pid = pid
+  begin
+    tmp = `ps -o pid --no-headers --ppid #{new_pid}`.split("\n")
+    break if tmp.empty?
+    pids.push tmp
+    new_pid = tmp
+  end while true
+
+  # remove duplicates and make into list
+  pids = pids.flatten.uniq
+  puts "found pids: #{pids.inspect}"
+
+  begin
+    cp = pids.pop
+    puts "sudo kill -9 #{cp}"
+    `sudo kill -9 #{cp}`
+    break if pids.empty?
+  end while true unless pids.empty?
+  puts "kill parent: #{pid}"
+  `sudo kill -9 #{pid}`
+end
+
+def start_sv
+  puts "starting sv as daemon"
+  start_sv_daemon
+
+  sv_exec([
+    "start redis 0 #{@redis_cmd}",
+    "start na 1 #{@netapp_cmd}"
+  ])
+end
+
+# feed commands to sv
+def sv_exec(cmds)
+  File.open(@pipe, "w+") {|f|
+    cmds.each {|c| f.puts c }
+  }
+end
+
+# apparently a double fork, then replacing the child with the new process
+# detaches it...
+def start_sv_daemon
+  `rm -rf #{@pipe}`
+
+  fork {
+    fork{
+      Process.exec("./bin/sv.rb -d")
+    }
+  }
+  
+  while !File.exist?(@pipe)
+    sleep 1
+  end  
+end
+
+def alive?(pid)
+  return true if `ps -o pid #{pid}`.split(" ").size > 1 
+  false
+end
+
+# write out configuration file
+def create_redisconf
+  return if File.exist?("redis.conf")
+  puts "writing new redis configuration"
+  File.open("redis.conf", "w") {|f|
+  	f.write <<REDIS
+daemonize no
+pidfile redis.pid
+port 6379
+timeout 300
+loglevel debug
+logfile stdout
+databases 16
+save 900 1
+save 300 10
+save 60 10000
+rdbcompression yes
+dbfilename dump.rdb
+dir ./
+slave-serve-stale-data yes
+appendonly no
+appendfsync everysec
+no-appendfsync-on-rewrite no
+vm-enabled no
+vm-swap-file /tmp/redis.swap
+vm-max-memory 0
+vm-page-size 32
+vm-pages 134217728
+vm-max-threads 4
+hash-max-zipmap-entries 512
+hash-max-zipmap-value 64
+list-max-ziplist-entries 512
+list-max-ziplist-value 64
+set-max-intset-entries 512
+activerehashing yes
+REDIS
+  }  
+end
+
+#######
+
+`sudo /etc/init.d/iptables stop`
+unpack_bundle
+update_gems
+store_hmac_keys
+create_redisconf
+stop_sv
+puts "blaa"
+start_sv
+
+# inform listeners
+`curl http://localhost:4567/event -i -X POST -d 'msg=/netapp/sarastro_netapp {"status" : "done"}'`
+
+puts "done"

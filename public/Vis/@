@@ -1,0 +1,62 @@
+var Clouds = null;
+var Views = null;
+var map = null;
+
+
+function initialize()
+{
+	// Cloud Object 
+	Clouds = new Object();
+	Clouds.clouds = {};   // individual clouds
+	Clouds.addCloud = addCloud;	
+	Clouds.addInstance = addInstance;
+	// View 
+	Views = new Object();
+	
+
+	// Google Maps 
+  	var myLatLng = new google.maps.LatLng(65, -18);
+	console.log("Added Ijsland");
+ 	var mapOptions = {
+    		zoom: 7,
+    		center: myLatLng,
+    		mapTypeId: google.maps.MapTypeId.TERRAIN
+  	};
+  	map = new google.maps.Map(document.getElementById("map_canvas"), mapOptions);
+
+}
+
+function AddCloud(cname, lat, lng)
+{
+	console.log("adding cloud :" + cname + " " + lat + " " + lng )
+	var cloud = new Object();
+	cloud.instances = new Array();
+	cloud.cname = cname; 
+	cloud.lat = lat;
+	cloud.lng = lng; 
+	cloud.lvl = 0;
+	// Fix marker
+ 	cloud.marker = new google.maps.Marker({ 
+ 		position: new google.maps.LatLng(lat, lng),
+ 		zoom: 7,
+        	map: map, 
+        	title: cname
+	 });
+	this.clouds[cname] = cloud;
+}
+
+
+function AddInstance(cname, iname, lvl)
+{
+	console.log("adding instance : " + iname + " in cloud " + cname + " vnet " + lvl);
+
+	var inst = new Object();
+	inst.name = iname;
+	inst.lvl = lvl;
+
+	this.clouds[cname][iname] = inst; 
+	
+
+}
+
+

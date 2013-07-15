@@ -1,0 +1,75 @@
+#!/usr/bin/env ruby
+#
+#
+# Copyright (C) 2012 Rudolf Strijkers <rudolf.strijkers@tno.nl>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# arguments: 
+#   src ip, dst ip, timeout, nr of probes, report (0 / 1)
+#
+# returns ping measurements or empty string on failure
+
+require 'json'
+require 'timeout'
+
+class Pinger
+  def initialize(src, dst, timeout, probes)
+    @src = src
+    @dst = dst
+    @timeout = timeout
+    @probes = probes
+  end
+
+  def get_address(ip)
+    `ssh rudolf@#{ip} -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ip -6 addr show lo | grep inet6 | head -1 | cut -d ' ' -f 6`.strip[0..-4]
+  end
+
+  def ping
+    result = []
+    begin
+      Timeout::timeout(@timeout+5) do
+        result = []
+        # if result < 2 lines an error occured, but that we know...
+        while result.size < 2 do    
+          # address might not be set yet...
+          target = get_address(@dst)
+          result = `ssh rudolf@#{@src} -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ping6 -w #{@timeout} -c #{@probes} #{target} | tail -2`.split("\n")
+          sleep 1
+        end
+      end
+     rescue Timeout::Error => e
+       puts "timeout! bailing out."
+     end
+    result
+  end
+  
+  def parse_statistics(stat)
+    return "" if stat == "" || stat.size < 2
+    
+    stat[1].split('/')[4].to_f
+  end
+
+  def run(report = 1)
+    start = Time.now
+    result = ping    
+    stop = Time.now
+    result = parse_statistics(result) if report == 1
+    
+    {:time => stop - start, :latency => result}.to_json
+  end
+end
+
+
+puts Pinger.new("<%= src %>", "<%= dst %>", <%= timeout %>, <%= probes %>).run(<%= report %>)

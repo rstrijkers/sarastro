@@ -1,0 +1,23 @@
+<html>
+<head>
+	<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.7.1/jquery.min.js"></script>
+	<script>
+// setup an event feed, so we don't have to poll				
+var eventSrc  = new EventSource("/netapp/feed?vid=<%= vid %>");
+eventSrc.addEventListener('message', function (event) {
+	// for now events just trigger updating
+	if(event.data != "pong!") {
+		get_netapps()
+  }
+});
+	
+	
+	function get_netapps() {			
+		jQuery.get('/netapp', {vid :<%= vid %>}, function(data) {			
+		})
+	}
+	</script>
+		<body>
+			<div class="result"></div>
+		</body>
+	<html>

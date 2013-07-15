@@ -1,0 +1,68 @@
+<html>
+<head>
+	<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.7.1/jquery.min.js"></script>
+	<script>
+	  var prefix127 = "2001:db8:1::"
+	  var prefix64 = "2001:db8:"	
+	  var subnet127 = 0
+	  var subnet64 = 2
+	  var vid = 7
+		
+		function assign_address_to_links() {			
+			var arr = {}
+			
+			jQuery.get('/netapp/links', {vid : 7}, function(data) {				
+				if(data == "") { return null; }
+				
+				// generate links and addresses from the netapps / links
+				arr = $.map(jQuery.parseJSON(data), function(n, i){
+					
+					// get /127 addresses for the link
+					server_addr = prefix127+(subnet127 + 1).toString(16)
+					client_addr = prefix127+(subnet127 + 2).toString(16)
+					subnet127+=4
+					
+		      return ({server : {nid : n.output.server, iface : n.output.server_data.tap, addr : server_addr}, client : {nid : n.output.client, iface : n.output.client_data.tap, addr: client_addr}});
+		    })
+
+				// arrange the iface / addresses according to netapp
+				no = {}
+				$.each(arr, function(i, n){
+					if(no[n.client.nid] == null) { no[n.client.nid] = {}}
+					if(no[n.client.nid].params == null) { no[n.client.nid].params = []}
+					
+					no[n.client.nid].params.push([n.client.iface, n.client.addr, "126"])
+
+					if(no[n.server.nid] == null) { no[n.server.nid] = {}}
+					if(no[n.server.nid].params == null) { no[n.server.nid].params = []}
+					
+					no[n.server.nid].params.push([n.server.iface, n.server.addr, "126"])						
+				})
+				
+				// assing a /64 to the loopback of each node
+				$.each(no, function(i, n) {
+					console.log(prefix64+subnet64.toString(16) + "::")
+					n.params.push(["lo", prefix64+subnet64.toString(16) + "::", "64"])
+					subnet64+=1
+				})
+				
+				console.log(no)
+				console.log(JSON.stringify({multi: no}))
+				
+				var app = "ipv6_127_addressing"
+				
+				jQuery.post("/vi/" + vid + "/run", {name : app , multi : no}, function(data) {		
+						$('.p').text("Executing " + app + " on Virtual Internet.");
+				});
+			});
+		}
+		
+	  $(document).ready(function(){
+		  assign_address_to_links()			
+		});
+	</script>
+</head>
+<body>
+	<p>Assigning /126 addresses to all the links in the network</p>
+</body>
+</html>

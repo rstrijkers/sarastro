@@ -1,0 +1,29 @@
+# scp bootstrap script to the server as default user with sudo
+#   bootstrap configuration manager
+#   just enough to run puppet 
+#   set credentials
+bootstrap.sh
+
+# run puppet as default user with sudo:
+#   ensure rudolf exists
+#   ensure ssh key pair for rudolf
+#   ensure rudolf is in sudoers
+#   copy remaining scripts to homedir rudolf
+puppet apply setupaccount.pp
+
+# run as rudolf:
+#   ensure rvm is installed as user rudolf
+#   ensure ruby 1.9.3 is installed with rvm
+#   install gem bundler under rudolf
+#   install and configure redis
+setupenv.sh
+
+# the loop for every application update:
+#   update code from repository
+#   upload hmac credentials
+#   ensure gems are up to date: bundler install
+#   start redis (if not running)
+#   start sarastro_netapp
+./bin/sv.rb
+	-> accepts 'echo [start|stop|restart] name keep_alive cmd 
+	-> keep_alive 1 is true, so on process end a new one will be started.

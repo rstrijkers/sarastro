@@ -1,0 +1,47 @@
+<h1>Hello <%= user[:first_name] %>,</h1>
+
+<h2>Your registered cloud providers are:</h2>
+<table border="1">
+	<tr>
+		<th>Action</th>
+		<th>ID</th>
+	  <th>Credentials</th>
+	  <th>Parameters</th>
+	</tr>
+<% credentials.each do |c| %>
+	<tr>
+		<td>
+			<form method="post" action="/cp/<%= c[:id] %>">
+				<input name="_method" type="hidden" value="delete" />
+				<input type="submit" value="delete"/>
+			</form>
+		</td>
+		<td><%= c[:id] %></td>
+		<td><%= c[:credentials]%></td>
+		<td><%= c[:parameters]%></td>
+	</tr>
+	</form>	
+<% end %>
+</table>
+
+<h2>Update Locations</h2>
+
+<a href="/cp/locations">get all cloud locations</a>
+
+<h2>Notice</h2>
+
+<p>Cloud providers are bound to regions, i.e. a cloud provider with multiple
+regions is unsupported. Each region should be registered as a different cloud provider if more regions are available.</p>
+
+<h2>Add credentials</h2> 
+<form method="post" accept-charset="UTF-8" action='/cp' enctype="text/plain">
+	<p>As raw json:</p> 
+	<textarea name="json" rows="4" cols="50"></textarea>
+	<input type="submit" value="Submit"/>
+</form>
+
+<form method="post" action='/cp' enctype="multipart/form-data">
+	<p>As file:</p> 
+	<input type="file" name="file">
+	<input type="submit" value="Submit"/>
+</form>

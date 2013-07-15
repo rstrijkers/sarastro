@@ -1,0 +1,6 @@
+{
+	"description" : "creates execution environment for sarastro_netapp",
+	"files" : [
+		"Gemfile"
+	]
+}

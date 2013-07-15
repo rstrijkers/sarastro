@@ -1,0 +1,404 @@
+<html>
+<head>
+	<script src="http://ajax.googleapis.com/ajax/libs/jquery/1/jquery.min.js"></script>
+	<!-- <script src="/static/jquery.xdomainajax.js"></script>-->
+	<script>
+		// XXX: might want to support initialization from sarastro's state when
+		// XXX: a crash occured
+	  var data = {};
+		var node = {};
+		var tunnel = {};
+		var netapp = false;
+		var tested = false;
+		var complete = 0;
+		var intransit = 0;
+		var nodeinterval = {};
+		var pinginterval = {};
+	  var maxconcurrent = 10; // works
+	
+		function initialize() {
+			data = {};
+			node = {};
+			tunnel = {};
+			netapp = false;
+			tested = false;
+			complete = 0;
+			intransit = 0;
+			nodeinterval = {};
+			pinginterval = {};
+		}
+	
+		function create_new_node(zone, nodeid) {
+			console.log("start: " + new Date().toTimeString())
+			
+			jQuery.post('/netapp', {"filter" : {"zones" : zone}, "vid" : "<%= vid %>", "name" : "testing"}, function(data) {
+
+				// attach request id to the node.
+				node[nodeid] = {}
+				node[nodeid].id = data
+				node[nodeid].status = "pending"
+				console.log("creating: " + zone + " " + nodeid + ". requestid: " + data)
+				intransit+=1
+			})
+	  }
+	
+		function get_id(d, id) {
+			var result = {}
+			$.each(d, function(i, e) {
+				result = i
+				if(e.id == id) {
+					return false
+				}
+			})
+			return result
+		}
+	
+		function delete_node(node) {
+			// delete the node
+			$.ajax({
+		 		type: 'DELETE',
+		 		url: "/netapp/id/".concat(node),
+		 		data: "vid=<%= vid %>",
+		 		dataType: 'text'
+		 	}).done(function(result) { 
+			  console.log("node " + node + " deleted")
+			})
+		}
+
+		function kill_network() {
+			$.each(data.nodes, function(i, val) {
+				console.log("killing: " + node[i] + " " + val)
+				delete_node(node[i].id)
+			})
+		}
+
+		function getRandomInt (min, max) {
+		    return Math.floor(Math.random() * (max - min + 1)) + min;
+		}
+
+    /* Initiate creating an on-demand network. The process starts by creating
+		 * the nodes. Then the events from the network trigger other requests.
+		 */
+		function create_network() {
+			initialize()
+			
+			data = $('#staticnetform').serializeArray()
+ 			var d = data[0].value
+			
+			try {
+				data = jQuery.parseJSON(d)
+				// Creating nodes				
+				$.each(data.nodes, function(node, prop) {					
+					// Defer creation until another node completes.
+					if(intransit >= maxconcurrent) {
+						// XXX interval function
+						nodeinterval[node] = setInterval(function(z, n) {
+							if(intransit <= maxconcurrent) {
+								console.log("create new node: " + n + " " + z)								
+								create_new_node(z, n)
+								
+								// stop execution of the timer
+								clearInterval(nodeinterval[n])
+							} 
+						},1000+getRandomInt(0,10000), prop[0], node);												
+					} else {
+						console.log("create new node: " + node + " " + prop[0])								
+						create_new_node(prop[0], node)					
+					}
+				})
+				
+				$('.result').html("creating network with JSON: " + data);				
+			} catch (e) {
+				$('.result').html("invalid JSON: " + e);				
+			}
+	
+			return false;
+		}
+		
+		/* Only load the JSON
+		 *
+		 */
+		function load_network() {
+			data = $('#staticnetform').serializeArray()
+ 			var d = data[0].value
+			
+			try {
+				data = jQuery.parseJSON(d)				
+				$('.result').html("loaded network with JSON: " + data);				
+			} catch (e) {
+				$('.result').html("invalid JSON: " + e);				
+			}
+	
+			return false;
+		}
+		
+		function run_test() {
+				var n = Object.keys(data.nodes).sort()
+				console.log("running pinger on node: " + n[0] + " and " + n[n.length-1])
+				// run the pinger
+				run_script("pinger", {src: node[n[0]].ip, dst: node[n[n.length-1]].ip, timeout: 360, probes : 1, report : "0"})
+		}
+		
+		function ping_sarastro(ip, reqid) {
+			console.log("pinging: " + ip + " of netapp: " + reqid)
+			$.get("/netapp/" + reqid + "/query?path=static/up?hmac=no", function(data) {
+				if(!data.match("alive")) {
+					pinginterval[ip] = setInterval(function(i, r) {
+						ping_sarastro(i, r)
+						clearInterval(pinginterval[i])
+					}, 1000, ip, reqid)
+				} else {
+					console.log("Sarastro is up: " + ip + " " + reqid + " " + get_id(node, reqid))
+					process_event("-sarastro_up:" + reqid + "  ")
+				}
+			})
+		}
+		
+		function make_tunnel(id, src, dst) {
+			if(tunnel[id] == undefined) {							
+				console.log("creating tunnel: " + src + " - " + dst)
+				tunnel[id] = {}	
+				tunnel[id].status = "creating"			
+				tunnel[id].src = src
+				tunnel[id].dst = dst
+
+				jQuery.post('/netapp/link', {"src" : src, "dst" : dst, "vid" : "<%= vid %>"}, function(data) {	
+					tunnel[id].id = data	
+				});
+			} else {
+				console.log("NOT creating tunnel: " + src + " - " + dst)
+			}
+		}
+	
+		function execute_app_on_all(name) {
+			console.log("executing netapp " + name + " on network")
+			jQuery.post("/vi/<%= vid %>/run", {"name" : name}, function(data) {		
+				console.log("executed app: " + name)
+			});
+			return false // don't submit form
+		}
+	
+		function execute_app(id, name) {
+			console.log("Executing app " + name + " on node " + id)
+			if(node[get_id(node, id)].status != "started") {
+				console.log("trying to execute app while node is still pending: " + id)
+				return false
+			}
+			
+		  jQuery.post("/netapp/" + id + "/run", {"vid" : "<%= vid %>", "name" : name}, function(data) {		
+				node[get_id(node, id)].status = "booting"
+			});
+			return false // don't submit form
+		}
+		
+		// Runs a script on the virtual internet
+		function run_script(script, args) {
+			console.log("running script to check if routers are up: " + script)
+			jQuery.post("/vi/<%= vid %>/script", 
+						$.extend({name : script}, args), function(data) {		
+							// do nothing
+			});
+		}
+		
+		/* Processes events and dispatches jobs. 
+		 * - node created -> 
+		 * 		  - update data structures
+		 *      - check_app    - check if an app is executed
+		 *      - execute_sarastro  - execute app
+		 *      - check_links  - if two nodes are up that need to form a link,
+		 *                       this function will trigger creating links
+		 *      - create_tunnel- create tunnel between two nodes
+		 *
+		 * - link_created -> 
+		 *      - update data structures
+		 * - app executed (???)
+		 * - 
+		 *
+		 *
+		 * Data is: func_name:requestid arguments (json formatted)
+		 */
+		function process_event(inp) {
+			// first organize data
+			var reqid = inp.substr(1,inp.indexOf(" ")-1).split(":")
+			var resp = "\"" + inp.substr(inp.indexOf(" "), inp.len)
+
+			switch(reqid[0])
+			{
+			case "run_script" :
+			  console.log("network is up and pingable at " + new Date().toTimeString() + "!")
+				
+				console.log("response: " + resp)				
+			case "sarastro_up":
+			  console.log("sarastro is up: " + reqid[1] + " " + get_id(node, reqid[1]))
+				node[get_id(node, reqid[1])].status = "done"			
+			  break
+			case "create_ne":
+				console.log("ne created")
+				intransit-=1
+				console.log(intransit + " nodes still in transit")
+
+				// update data structures
+				node[get_id(node, reqid[1])].status = "started"
+
+				// record IP to ping sarastro later
+				try {
+					var tmp = $.parseJSON(resp)
+					tmp = $.parseJSON(tmp)
+					node[get_id(node, reqid[1])].ip = tmp.public_ip_address										
+  			} catch(e) {
+					console.log("something went wrong with the ne, so will crash now: " + e)
+				}
+				
+				// start sarastro
+				execute_app(reqid[1], "sarastro_netapp")
+				
+			  break
+			case "create_link":
+				console.log("link " + get_id(tunnel, reqid[1]) + " created")
+			
+				// update data structures
+				tunnel[get_id(tunnel, reqid[1])].status = "done"
+			  break
+			case "run_on_netapp":
+				console.log("netapp " + reqid[1] + " done")
+
+				// update data structures
+				if(resp.match("sarastro_netapp")) {
+					ping_sarastro(node[get_id(node, reqid[1])].ip, reqid[1])
+				} else {									
+
+					console.log("response netapp: " + resp)
+					
+					if(resp.match(data.netapp[0])) {
+						complete+=1						
+						console.log(complete + " of " + Object.keys(node).length + " netapps complete")					
+					}
+				}
+				
+			  break
+			case "run_on_all_netapps":				
+				console.log("done running on all netapps")				
+				break
+			default:
+				console.log("no match: " + reqid[0])
+			}
+			
+			// After every event, check if the network is complete
+			if(check_complete()) {
+				console.log("netapp = " + netapp)
+				// run last netapp over all the nodes
+				if(!netapp) {
+					console.log("executing netapp on network: " + data.netapp[0])
+					execute_app_on_all(data.netapp[0])					
+					netapp = true
+				}
+			}
+			
+			// Everything is done
+			// Now we want to ping the start and end of the network until we
+			// have a valid ping
+			if(netapp && !tested && Object.keys(node).length == complete) {				
+				tested = true
+				run_test()
+			}
+		}
+
+		// Network is complete if all the links are created.
+		function check_complete() {
+			console.log("check complete")
+			var stop = true
+
+			if(!data.links) {
+				return false
+			}
+			
+			$.each(data.links, function(e) {
+				// if tunnel[e] does not exist, it must be made
+				if(!tunnel[e]) {
+					var src = data.links[e][0]
+					var dst = data.links[e][1]
+					
+					// Nodes are not booted yet
+					if(node[src] == undefined || node[dst] == undefined) {
+						if(node[src] == undefined) {
+							console.log("link " + e + " node " + src + " not up")						
+						}
+						if(node[dst] == undefined) {
+							console.log("link " + e + " node " + dst + " not up")							
+						}
+					} else {					
+						// check if new tunnels can be made
+						if((node[src].status == "done") && (node[dst].status == "done")) {
+						 	console.log("node " + src + " - " + dst + " up, making link")
+							make_tunnel(e, node[src].id, node[dst].id)
+						}
+					}
+					stop = false					
+				} else {
+					if(tunnel[e].status != "done") {
+						console.log("tunnel " + e + " not done!")
+						stop = false 						
+					}
+				}
+			})
+			return stop
+		}
+
+		/* setup an event feed, so we don't have to poll				
+		 */
+		var eventSrc  = new EventSource("/vi/<%= vid %>/feed");
+	  eventSrc.addEventListener('message', function (event) {
+			// for now events just trigger updating
+			if(event.data != "pong!") {
+				process_event(event.data)
+		  }
+	  });
+	
+//	  $(document).ready(function(){})
+	
+		</script>
+		<body>
+			<title>On-demand Network Controller</title>
+			<h1>Hello <%= user[:first_name] %> (<%= user[:email] %>),</h1>
+			<h2>Virtual Internet <%= vid %></h2>
+			<h2>Create a predefined on-demand network</h2>
+			
+			<form id="staticnetform" onsubmit="return create_network()" enctype="text/plain">
+				<textarea name="json" rows="20" cols="50">
+{
+  "nodes" : {
+    "n1" : ["eu-west-1a"],
+    "n2" : ["eu-west-1a"],
+    "n3" : ["eu-west-1a"],
+    "n4" : ["eu-west-1a"],
+    "n5" : ["eu-west-1a"],
+    "n6" : ["eu-west-1a"],
+    "n7" : ["eu-west-1a"]
+	},
+	"links" : {
+    "e1" : ["n1", "n2"],
+    "e2" : ["n2", "n3"],
+    "e3" : ["n3", "n4"],
+    "e4" : ["n4", "n5"],
+    "e5" : ["n5", "n6"],
+    "e6" : ["n6", "n7"]
+  },
+  "netapp" : ["ipv6_router"]
+}
+				</textarea>
+				<input type="submit" value="run"/>
+			</form>
+			
+			<button type="button" onclick="kill_network()">kill network</button>
+			<button type="button" onclick="load_network()">load network</button>
+			<button type="button" onclick="run_test()">check if up</button>
+			
+			<h2>Create an on-demand network with a script!</h2>
+				<p>todo</p>
+			
+			<div class="create_node" style="font-weight:bold;background-color:#FFFFCC">new netapp</div>
+			
+			<div class="result"></div>
+			
+	</body>
+<html>

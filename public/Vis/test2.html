@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+<SCRIPT type="text/javascript" src="http://code.jquery.com/jquery-latest.js"></SCRIPT>
+<STYLE>
+#content {
+    background-color:#6688ff;
+    position:absolute;
+    width:100px;
+    height:100px;
+    padding:3px;
+    margin-top:5px;
+    left: 100px;
+}
+</STYLE>
+<input type="button" id="left" value="Left"/>
+<input type="button" id="right" value="Right"/>
+<div id="content">Move</div>
+<script>
+$("#right").click(function() {
+    $("#content").animate(
+            {"left": "+=100%"},
+            "slow");
+});
+$("#left").click(function() {
+    $("#content").animate(
+            {"left": "-=100%"},
+            "slow");
+});
+</script>
+
+</body>
+</html>
+

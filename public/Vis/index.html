@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta name="viewport" content="initial-scale=1.0, user-scalable=no" />
+
+    <style type="text/css">
+
+html { height: 100% }
+body { height: 100%; 
+background: white;
+width: 100%;
+margin: 0; padding: 0 }
+
+#map_canvas {
+       position:absolute;
+       float:left;
+       height: 100%;
+   -webkit-transition: left 1s ease-in;
+}
+
+
+.link {
+  stroke: #999;
+  width: 5px;
+}
+
+
+#slideout1 {
+	position: fixed;
+	top: 40px;
+	right: 0;
+	width: 35px;
+	padding: 12px 0;
+	text-align: center;
+	background: #6DAD53;
+	-webkit-transition-duration: 0.3s;
+	-moz-transition-duration: 0.3s;
+	-o-transition-duration: 0.3s;
+	transition-duration: 0.3s;
+	-webkit-border-radius: 0 5px 5px 0;
+	-moz-border-radius: 0 5px 5px 0;
+	border-radius: 0 5px 5px 0;
+}
+#slideout_inner1 {
+	position: fixed;
+	top: 0px;
+	right: -250px;
+	background: #6DAD53;
+	width: 200px;
+	padding: 25px;
+	height: 100%;
+	-webkit-transition-duration: 0.3s;
+	-moz-transition-duration: 0.3s;
+	-o-transition-duration: 0.3s;
+	transition-duration: 0.3s;
+	text-align: right;
+	-webkit-border-radius: 0 0 5px 0;
+	-moz-border-radius: 0 0 5px 0;
+	border-radius: 0 0 5px 0;
+}
+#slideout_inner1 textarea {
+	width: 190px;
+	height: 100px;
+	margin-bottom: 6px;
+}
+#slideout1:hover {
+	right: 250px;
+}
+#slideout1:hover #slideout_inner1 {
+	right: 0;
+}
+
+
+#slideout2 {
+	position: fixed;
+	top: 150px;
+	right: 0;
+	width: 35px;
+	padding: 12px 0;
+	text-align: center;
+	background: #FDAD53;
+	-webkit-transition-duration: 0.3s;
+	-moz-transition-duration: 0.3s;
+	-o-transition-duration: 0.3s;
+	transition-duration: 0.3s;
+	-webkit-border-radius: 0 5px 5px 0;
+	-moz-border-radius: 0 5px 5px 0;
+	border-radius: 0 5px 5px 0;
+}
+#slideout_inner2 {
+	position: fixed;
+	top: 0px;
+	right: -250px;
+	background: #FDAD53;
+	width: 200px;
+	padding: 25px;
+	height: 100%;
+	-webkit-transition-duration: 0.3s;
+	-moz-transition-duration: 0.3s;
+	-o-transition-duration: 0.3s;
+	transition-duration: 0.3s;
+	text-align: right;
+	-webkit-border-radius: 0 0 5px 0;
+	-moz-border-radius: 0 0 5px 0;
+	border-radius: 0 0 5px 0;
+}
+#slideout_inner2 textarea {
+	width: 190px;
+	height: 100px;
+	margin-bottom: 6px;
+}
+#slideout2:hover {
+	right: 250px;
+}
+#slideout2:hover #slideout_inner2 {
+	right: 0;
+}
+    </style>
+
+
+  <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.7.1/jquery.min.js"></script>
+  <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.7.1/jquery.js"></script> 
+  <script src="arbor.js"></script>
+
+    <script type="text/javascript" src="http://maps.googleapis.com/maps/api/js?key=AIzaSyDE_JfTdyAhVMT2WBuAyPLPI16Ulc-uYYg&sensor=false">
+    </script>
+  <script src="http://malsup.github.com/jquery.form.js"></script> 
+  <script src="d3.v2.js"></script>
+  <script src="cloud.js"></script>
+  <script src="sidebar.js"></script>
+  <script src="views.js"></script>
+  <script src="/static/Vis/ui.js"></script>
+
+  </head>
+
+
+	
+  <body onload="initialize()">
+     <div id="map_canvas" style="width:100%; height:100%"></div>
+     <div id="chart" style="width:100%; height:100%"></div>
+     <div id="map_vpn" style="width:100%; height:100%">
+     <canvas id="viewport" width="900" height="700"></canvas>
+     
+     </div> 
+
+
+	<div id="slideout1">
+		<img src="feedback.png" alt="Feedback" />
+            <div id="slideout_inner1">
+                  <a href="#" onmousedown="showMap(map_canvas)">World Map</a>
+                  <a href="#" onmousedown="showMap(chart)">VPN Map</a>
+                  <a href="#" onmousedown="showMap(map_vpn)">Old Map</a>
+                  <input type="button" id="left" action="onmousedown()" value=""/>
+    			<input type="button" id="right" value="Right"/>
+
+			<form id="myForm" method="post">
+				<textarea></textarea>
+				<input type="submit" value="Post feedback"></input>
+			</form>
+		</div>
+	</div>
+
+	<div id="slideout2">
+		<img src="feedback.png" alt="Feedback" />
+		<div id="slideout_inner2">
+             <div id="viewmap">
+            <div id="hidemap">
+
+
+            Mode:<div class="mode_info" style="background-color:#AABBFF">info</div>
+            <div class="mode_info_edge" style="background-color:#AABBFF">info edge</div>
+<div class="mode_draw" style="background-color:#AABBFF">draw</div>
+<div class="mode_del_node" style="background-color:#FF0000">delete node</div>
+<div class="mode_del_edge" style="background-color:#FF0000">delete edge</div>
+Last result:<div class="result" style="background-color:#BBBBCC"></div>
+            <div class="loc_num"></div> 
+            <div class="locations_option_list"> </div> 
+            <div class="create_node2" style="font-weight:bold;background-color:#00FF00">new netapp</div>
+<p>On all the netapps: <div class="apps" style="font-weight:bold;background-color:#abcabc"></div></p>
+<p>On one netapp: <div class="apps-single" style="font-weight:bold;background-color:#abcabc"></div></p>
+
+
+
+            </div>
+
+		      </div>
+      </div>
+  <script src="/static/Vis/test.js"></script>
+  </body>
+</html>

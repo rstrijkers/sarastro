@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+#
+# Copyright (C) 2012 Rudolf Strijkers <rudolf.strijkers@tno.nl>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# execute this script as user rudolf 
+# sets up rvm, ruby, and bundler: all that is necessary to run sarastro
+
+# Install the packages required for rvm: `rvm requirements`
+echo "Untarring"
+tar -xf <%= name %>.tgz
+
+os=`facter operatingsystem`
+echo "Checking dependencies for $os"
+case $os in
+  "Ubuntu"*)
+	sudo apt-get install -y build-essential openssl libreadline6 libreadline6-dev curl zlib1g zlib1g-dev libssl-dev libyaml-dev libsqlite3-0 libsqlite3-dev sqlite3 libxml2-dev libxslt-dev autoconf libc6-dev ncurses-dev automake libtool bison wget sysstat libcurl4-gnutls-dev vtun
+	;;
+  "Amazon"|"Linux"*)
+	sudo yum install -y git gcc-c++ patch readline readline-devel zlib zlib-devel libyaml-devel libffi-devel openssl-devel make bzip2 autoconf automake libtool bison wget ruby-devel sysstat libxml2 libxml2-devel libxslt libxslt-devel libcurl-devel vtun
+	;;
+  *)
+	echo "unsupported os: $os"
+	exit
+	;;
+esac
+
+#   Ensure ruby 1.9.3 is installed using rvm
+if [ ! -e ~/.rvm ]; then
+	echo "Installing rvm"
+	curl -L get.rvm.io | bash -s
+	source ~/.rvm/scripts/rvm
+	rvm install 1.9.3
+	rvm --default 1.9.3
+
+	# use bundler to update all the needed gems
+	cat > ~/.gemrc <<HERE
+gem: --no-ri --no-rdoc
+HERE
+
+	cat >> ~/.bashrc <<HERE
+PATH=$PATH:$HOME/.rvm/bin
+source ~/.rvm/scripts/rvm
+rvm use 1.9.3 > /dev/null 2>&1
+HERE
+fi
+
+#   Install bundler gem. All base requirements will be installed by bundler.
+if [ "`gem list --local | grep bundler ; echo $?`" = "1" ]; then
+	echo "Installing bundler"
+	tar -xf <%= name %>.tgz
+	gem install bundler
+fi
+
+echo "Updating ruby gems"
+bundle install
+
+#   Install redis
+if [ ! -f ~/redis-2.4.12/src/redis-server ]; then
+	echo "Installing redis"
+	wget http://redis.googlecode.com/files/redis-2.4.12.tar.gz
+	tar xzf redis-2.4.12.tar.gz
+	cd redis-2.4.12
+	make
+	cd ..
+fi
+
+echo "Done!"

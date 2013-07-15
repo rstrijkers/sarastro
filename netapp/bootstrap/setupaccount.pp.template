@@ -1,0 +1,71 @@
+#
+# create a user rudolf and setup the account
+#
+#
+# Copyright (C) 2012 Rudolf Strijkers <rudolf.strijkers@tno.nl>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+
+user { 'rudolf':
+    home       => '/home/rudolf',
+    managehome => true,         
+#    groups     => ['rudolf'],    
+    shell => "/bin/bash",
+    password   => 
+"fill_in_your_password",
+#    require => Group["rudolf"]
+}
+
+file {"/home/rudolf/.ssh/authorized_keys":
+   ensure => "present",
+   group => "rudolf",
+   mode => "600",
+   owner => "rudolf",
+   require => Ssh_authorized_key["rudolf-key"]
+}
+
+define append_if_no_such_line($file, $line, $refreshonly = 'false') {
+   exec { "/bin/echo '$line' >> '$file'":
+      unless      => "/bin/grep -Fxqe '$line' '$file'",
+      path        => "/bin",
+      refreshonly => $refreshonly,
+   }
+}
+
+append_if_no_such_line{"sudoers-rudolf":
+           file => "/etc/sudoers",
+           line => "rudolf ALL=(ALL) NOPASSWD: ALL",
+		require => User["rudolf"]
+}
+
+define delete_lines($file, $pattern) {
+    exec { "/bin/sed -i -r -e '/$pattern/d' $file":
+        onlyif => "/bin/grep -E '$pattern' '$file'",
+    }
+}
+
+delete_lines {"requiretty":
+    file => "/etc/sudoers",
+    pattern => "requiretty",
+}
+
+ssh_authorized_key {"rudolf-key":
+                    ensure  => present,
+                    key     => "fill_in_your_key",
+                    type    => "ssh-rsa",
+                    user    => "rudolf",
+					require => User["rudolf"]
+            }

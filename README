@@ -1,0 +1,37 @@
+steal time measures how much the underlying hardware is overcommitted: 
+do a test with cpu hungry task, like compilation, while monitoring steal time.
+
+performance should be measured in real time! -> how can we show that in a virtual internet? Well, steal time indicated how many percent of the cpu is unavailable to you. It can only be measured well by generating a cpu consuming task...
+
+-> experiment: ruby 1.9.3 compilen op vms in gogrid, ninefold, amazon en brightbox,
+elke seconde meten: steal time, cpu user, cpu system, cpu total, load
+
+README:
+
+If authentication fails over https links, make sure that curl-ca-bundle.crt can be found. Otherwise, net/https will silently ignore the http request.
+
+All regions should contain at least one image that starts with "vi "
+
+need Nginx as a ssl proxy
+
+- project aanmelden op github:
+
+Sarastro - a (prototype of a) framework for creating and managing virtual internets
+
+redis-server /opt/local/etc/redis.conf
+
+-> credentials eruit halen
+
+HMAC authentication:
+http://broadcast.oreilly.com/2009/12/principles-for-standardized-rest-authentication.html
+
+
+-------------
+
+Implementation issue:
+- subscribing to the feed of network elements and reporting that in the
+  on-demand network feed
+- share javascript code base (creating links / network elements / netapps)
+- instructions to create an ssl proxy
+- run standalone as well as in a PaaS service: Heroku / Google Appengine
+-

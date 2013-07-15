@@ -1,0 +1,18 @@
+source :rubygems
+
+gem 'fog'
+gem 'json'
+gem 'thin'
+gem 'ruby-openid'
+gem 'rack-openid'
+gem 'sinatra'
+gem 'async_sinatra'
+gem 'eventmachine'
+gem 'uuidtools'
+gem 'hiredis'
+gem 'em-hiredis'
+gem 'redis'
+gem 'pry'
+gem 'addressable'
+gem 'rest-client'
+gem 'typhoeus'

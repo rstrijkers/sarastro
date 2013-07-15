@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+#
+# Copyright (C) 2012 Rudolf Strijkers <rudolf.strijkers@tno.nl>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# configures a standard quagga
+#
+# assumes that addresses are configured
+#
+
+nid=<%= nid %>
+os=`facter operatingsystem`
+echo "Checking dependencies for $os"
+case $os in
+  "Ubuntu"*)
+	sudo apt-get remove bird6 -y
+	sudo apt-get install quagga telnet -y 
+	
+	sudo su - -c "cat << EOF > /etc/quagga/daemons
+zebra=yes
+ospf6d=yes
+EOF
+"
+	;;
+  "Amazon"|"Linux"|"RedHat"*)
+	sudo yum install -y quagga telnet iproute
+
+	sudo su - -c "cat << EOF > /etc/quagga/daemons.conf
+zebra=yes
+ospf6=yes
+EOF
+"
+
+# should already be installed by the template
+#	sudo yum remove -y bird
+	# disabling se linux
+	#sudo su - -c "echo 0 >/selinux/enforce"
+	;;
+  *)
+	echo "unsupported os: $os"
+	exit
+	;;
+esac
+
+sudo sysctl -w net.ipv6.conf.all.forwarding=1
+
+# set loopback address based in the eth0 address
+echo "Using nid: $nid"
+addr="2001:db8"
+for i in `echo $nid | fold -w 4`; do
+	addr="$addr:$i"
+done
+addr="$addr::"
+
+sudo ip -6 addr flush dev lo scope global
+sudo ip -6 addr add $addr/64 dev lo
+
+ifaces=`ip -6 addr | grep ^[0-9]*:\ vi | awk '{sub(":", "", $2); print $2}'`
+#networks=`ip -6 addr | grep -A 2 ^[0-9]:\ vi | grep inet6 | awk '{print $2}'`
+#lo_network=`ip -6 addr show lo | grep inet6 | awk '{print $2}' | grep 2001`
+
+# make interfaces
+ospf_ifaces=""
+for iface in $ifaces
+do
+        ospf_ifaces="${ospf_ifaces}interface $iface
+	  ipv6 ospf6 hello-interval 1
+	  ipv6 ospf6 dead-interval 4
+	  ipv6 ospf6 retransmit-interval 5
+"
+        sudo ifconfig $iface up
+done
+
+# set the hoplimit
+for iface in $ifaces
+do
+        sudo sysctl -w net.ipv6.conf.$iface.hop_limit=255
+done
+
+sudo sysctl -w net.ipv6.conf.all.hop_limit=255
+sudo sysctl -w net.ipv6.conf.default.hop_limit=255
+
+# bind the network to the area
+#ospf_networks=""
+#for network in $networks
+#do
+#        ospf_networks="${ospf_networks}area 0.0.0.0 range $network
+#"
+#done
+
+# bind interfaces to the area
+# 
+# dead-interval
+# retransmit-interval: time between retransmit LSAs when no ack is received
+ospf_area=""
+for iface in $ifaces
+do
+        ospf_area="${ospf_area}interface $iface area 0.0.0.0
+"
+done
+
+sudo su - -c "cat <<EOF > /etc/quagga/zebra.conf
+password 1234
+enable password 1234
+line vty
+
+hostname `hostname`
+ipv6 forwarding
+EOF
+"
+
+sudo su - -c "cat << EOF > /etc/quagga/ospf6d.conf
+password 1234
+enable password 1234
+line vty
+
+interface lo
+$ospf_ifaces
+
+router ospf6
+        router-id `ifconfig eth0 | grep 'inet ' | awk '{print $2}' | sed 's/addr://'`
+		redistribute connected
+
+		interface lo area 0.0.0.0
+		$ospf_area
+EOF
+"
+
+# add interface update daemon and start it
+cat <<'EOFNOSUB' > monitor_interfaces
+#!/usr/bin/env bash
+
+function get_interfaces {
+  echo `ip -6 addr | grep ^[0-9]*:\ vi | awk '{sub(":", "", $2); print $2}'`
+}
+
+function wait_for_telnet {
+	while [ ! -n "`nc -z ::1 2606`" ]; do sleep 1; echo "waiting for ospf6"; done	
+}
+
+function new_address {
+  local iface=$1
+  local mask=64
+  local addr=`ip addr show dev lo scope global | grep inet6 | awk '{print substr($2,0,length($2)-5)}'`
+
+  for i in `echo ${iface#??} | fold -w 4`; do
+    addr="$addr:$i"
+  done
+  addr="$addr::"
+
+  echo "setting address for $iface: $addr"
+  sudo ip -6 addr flush dev $iface scope global
+  sudo ip -6 addr add $addr/$mask dev $iface  
+}
+
+function diff_list {
+  local a=$1
+  local b=$2
+  local r=()
+  local skip=
+
+  for i in $a; do
+    skip=
+    for j in $b; do
+      [[ $i == $j ]] && { skip=1; break;}
+    done
+    [[ -n $skip ]] || r[$[${#r[@]}+1]]=$i
+  done
+
+  echo ${r[*]}
+}
+
+function update_ospf {
+  local del=$1
+  local add=$2
+  local run=
+  local script='
+  spawn telnet ::1 2606
+  expect "Password:"
+  send "1234\r"
+  expect "*>"
+  send "enable\r"
+  expect "Password:"
+  send "1234\r"
+  expect "*#"
+  send "conf t\r"
+  expect "*)#"
+  send "router ospf6\r"
+'
+  for iface in $del; do
+	echo "deleting iface: $iface"
+	dels="
+  	send \"no interface $iface area 0.0.0.0\r\"
+	expect \"*#\"
+"
+    run=1
+  done
+
+  for iface in $add; do
+	echo "adding iface: $iface"
+	#new_address $iface
+	
+	sudo ifconfig $iface up
+	
+	adds="
+  	send \"interface $iface area 0.0.0.0\r\"
+	expect \"*#\"
+"
+    run=1
+  done
+
+  if [ "$run" == "1" ]; then
+	echo "running : $script $dels $adds"
+	wait_for_telnet
+	expect -c "$script$dels$adds"
+  fi
+}
+
+old=`get_interfaces`
+while [ true ]; do
+  sleep 1
+
+  new=$(get_interfaces)  
+    
+  [[ -n diff ]] && update_ospf "$(diff_list "${old[*]}" "${new[*]}")" "$(diff_list "${new[*]}" "${old[*]}")"
+
+  old=$new
+done
+EOFNOSUB
+
+# start monitor the interfaces
+chmod 755 monitor_interfaces
+for p in "`ps eax | grep monitor_interfaces | awk '{print $1}'`"; do
+	kill $p
+done
+./monitor_interfaces &
+
+# sleep with random value, we don't want to overload servers.
+maxdelay=60
+case $os in
+  "Ubuntu"*)
+	sudo /etc/init.d/quagga stop
+	sleep $[($RANDOM % $maxdelay) + 10]
+	sudo /etc/init.d/quagga start	
+	;;
+  "Amazon"|"Linux"|"RedHat"*)
+	sudo /etc/init.d/zebra stop
+	sudo /etc/init.d/ospf6d stop
+	sleep $[($RANDOM % $maxdelay) + 10]
+	sudo /etc/init.d/zebra start
+	sudo /etc/init.d/ospf6d start
+	;;
+  *)
+	echo "unsupported os: $os"
+	exit
+	;;
+esac
+
+# inform listeners
+curl http://localhost:4567/event -i -X POST -d 'msg=/netapp/ipv6router {"status" : "done"}'

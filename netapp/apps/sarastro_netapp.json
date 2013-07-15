@@ -1,0 +1,11 @@
+{
+	"description" : "uploads all required files and restarts sarastro",
+	"files" : [
+		"bin/sarastro_netapp.rb",
+		"bin/sv.rb",
+		"lib/sarastro/netapp",
+		"lib/sarastro/shared",
+		"lib/sarastro_netapp.rb",
+		"Gemfile"
+	]
+}

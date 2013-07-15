@@ -1,0 +1,37 @@
+<h1>Hello <%= user[:first_name] %>,</h1>
+
+<h2>Virtual Internets:</h2>
+<table border="1">
+	<tr>
+		<th>Action</th>
+	  <th>VID</th>
+		<th>URL</th>
+		<th>HMAC ID</th>
+		<th>HMAC KEY</th>
+	</tr>
+<% if vis %>
+	<% vis.each do |data| %>
+		<tr>
+			<td>
+				<form method="post" action="/vi/<%= data[:vid] %>">
+					<input name="_method" type="hidden" value="delete" />
+					<input type="submit" value="delete"/>
+				</form>
+			</td>
+			<td><%= data[:vid] %></td>
+			<td><a href="/vi/<%= data[:vid] %>">Go to VI</a></td>
+			<td><%= data[:hmac][:id] %></td>			
+			<td><%= data[:hmac][:key]  %></td>
+		</tr>
+	<% end %>
+<% else %>
+		<tr>
+			<td></td>
+			<td>No virtual Internets</td>
+		</tr>	
+<% end %>
+</table>
+<h2>Create Virtual Internet</h2>
+<form method="post" accept-charset="UTF-8" action='/vi' enctype="text/plain">
+	<input type="submit" value="Submit"/>
+</form>
